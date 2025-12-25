@@ -1,0 +1,1 @@
+cargo run --example cube_dx12 --release
