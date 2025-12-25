@@ -1,0 +1,75 @@
+[package]
+name = "epicx"
+version = "0.1.0"
+edition = "2021"
+authors = ["EPICX Team"]
+description = "A React-inspired DirectX12 graphics framework for Rust"
+license = "MIT"
+repository = "https://github.com/epicx/epicx"
+keywords = ["graphics", "directx12", "dx12", "react", "ui"]
+categories = ["graphics", "rendering", "game-development"]
+
+[dependencies]
+# Windows API bindings for DirectX12
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_System_Threading",
+    "Win32_System_WindowsProgramming",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_LibraryLoader",
+    "Win32_Security",
+]}
+
+# Math library for graphics
+glam = { version = "0.29", features = ["serde"] }
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# Error handling
+thiserror = "1.0"
+
+# Async runtime (optional for async operations)
+tokio = { version = "1.0", features = ["rt", "macros"], optional = true }
+
+# Serialization for props/state
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Unique identifiers for components
+uuid = { version = "1.0", features = ["v4"] }
+
+# Parking lot for better synchronization primitives
+parking_lot = "0.12"
+
+# Raw window handle for cross-platform window abstraction
+raw-window-handle = "0.6"
+
+# Winit for window creation
+winit = "0.30"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[features]
+default = []
+async = ["tokio"]
+validation = []
+
+[[example]]
+name = "hello_triangle"
+path = "examples/hello_triangle.rs"
+
+[[example]]
+name = "component_demo"
+path = "examples/component_demo.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
