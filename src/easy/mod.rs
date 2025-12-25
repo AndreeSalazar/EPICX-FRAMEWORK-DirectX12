@@ -193,8 +193,8 @@ impl EasyApp {
         }
     }
 
-    /// Initialize the graphics system
-    pub fn init(&mut self) -> Dx12Result<()> {
+    /// Initialize the graphics system (requires HWND from window)
+    pub fn init_with_hwnd(&mut self, hwnd: windows::Win32::Foundation::HWND) -> Dx12Result<()> {
         let config = GraphicsConfig {
             width: self.width,
             height: self.height,
@@ -202,7 +202,7 @@ impl EasyApp {
             ..Default::default()
         };
 
-        self.graphics = Some(Graphics::new(config)?);
+        self.graphics = Some(Graphics::new(hwnd, config)?);
         self.running = true;
         Ok(())
     }
@@ -223,67 +223,36 @@ impl EasyApp {
     }
 
     /// Run the application with a draw callback
-    pub fn run<F>(&mut self, mut draw_fn: F) -> Dx12Result<()>
+    /// Note: Requires window HWND - use run_with_window instead
+    pub fn run_loop<F>(&mut self, mut draw_fn: F)
     where
         F: FnMut(&mut DrawContext),
     {
-        self.init()?;
-
         while self.running {
             let mut ctx = DrawContext::new(self.width as f32, self.height as f32);
-            
-            // Call user's draw function
             draw_fn(&mut ctx);
-
-            // Process draw commands (in a full implementation)
-            // For now, just increment frame count
             self.frame_count += 1;
 
-            // Simulate frame limiting
             if self.frame_count > 1000 {
                 self.running = false;
             }
         }
-
-        Ok(())
     }
-
-    /// Run the application with update and draw callbacks
-    pub fn run_with_update<U, D>(&mut self, mut update_fn: U, mut draw_fn: D) -> Dx12Result<()>
-    where
-        U: FnMut(f32), // delta time
-        D: FnMut(&mut DrawContext),
-    {
-        self.init()?;
-
-        let mut last_time = std::time::Instant::now();
-
-        while self.running {
-            let now = std::time::Instant::now();
-            let delta = (now - last_time).as_secs_f32();
-            last_time = now;
-
-            // Update
-            update_fn(delta);
-
-            // Draw
-            let mut ctx = DrawContext::new(self.width as f32, self.height as f32);
-            draw_fn(&mut ctx);
-
-            self.frame_count += 1;
-        }
-
-        Ok(())
+    
+    /// Get mutable reference to graphics (if initialized)
+    pub fn graphics_mut(&mut self) -> Option<&mut Graphics> {
+        self.graphics.as_mut()
     }
 }
 
-/// Quick function to run a simple graphics app
-pub fn run_app<F>(title: &str, width: u32, height: u32, draw_fn: F) -> Dx12Result<()>
+/// Quick function to run a simple graphics app (placeholder)
+pub fn run_app<F>(title: &str, width: u32, height: u32, mut draw_fn: F) -> Dx12Result<()>
 where
     F: FnMut(&mut DrawContext),
 {
     let mut app = EasyApp::new(title, width, height);
-    app.run(draw_fn)
+    app.run_loop(draw_fn);
+    Ok(())
 }
 
 /// Sprite for easy 2D rendering

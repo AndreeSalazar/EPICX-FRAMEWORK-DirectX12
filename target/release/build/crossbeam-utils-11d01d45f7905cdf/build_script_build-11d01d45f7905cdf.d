@@ -1,0 +1,9 @@
+C:\Users\andre\OneDrive\Documentos\EPICX\target\release\build\crossbeam-utils-11d01d45f7905cdf\build_script_build-11d01d45f7905cdf.d: C:\Users\andre\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crossbeam-utils-0.8.21\build.rs C:\Users\andre\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crossbeam-utils-0.8.21\no_atomic.rs C:\Users\andre\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crossbeam-utils-0.8.21\build-common.rs
+
+C:\Users\andre\OneDrive\Documentos\EPICX\target\release\build\crossbeam-utils-11d01d45f7905cdf\build_script_build-11d01d45f7905cdf.exe: C:\Users\andre\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crossbeam-utils-0.8.21\build.rs C:\Users\andre\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crossbeam-utils-0.8.21\no_atomic.rs C:\Users\andre\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crossbeam-utils-0.8.21\build-common.rs
+
+C:\Users\andre\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crossbeam-utils-0.8.21\build.rs:
+C:\Users\andre\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crossbeam-utils-0.8.21\no_atomic.rs:
+C:\Users\andre\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crossbeam-utils-0.8.21\build-common.rs:
+
+# env-dep:CARGO_PKG_NAME=crossbeam-utils

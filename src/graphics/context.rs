@@ -54,8 +54,13 @@ impl<'a> GraphicsContext<'a> {
         // In a full implementation, this would issue clear commands
     }
 
-    /// Present the frame
-    pub fn present(&mut self) -> Dx12Result<()> {
-        self.graphics.end_frame()
+    /// Begin a frame for rendering
+    pub fn begin_frame(&mut self) -> Dx12Result<super::RenderFrame> {
+        self.graphics.begin_frame()
+    }
+    
+    /// End and present the frame
+    pub fn end_frame(&mut self, frame: super::RenderFrame) -> Dx12Result<()> {
+        self.graphics.end_frame(frame)
     }
 }

@@ -1,14 +1,14 @@
-//! Real-time 3D Cube with DirectX12 Window
+//! Real-time 3D Cube with DirectX12 Window - SIMPLIFIED with Level B
 //! 
-//! Demonstrates EPICX DirectX12 rendering:
-//! - Window creation with winit
-//! - DirectX12 device, swap chain, command queue
-//! - Real-time rendering loop
-//! - Animated clear color
+//! Demonstrates EPICX hierarchy:
+//! - Level A (dx12): Raw DirectX12 - NOT used directly here
+//! - Level B (graphics): Graphics struct - USED HERE for simplicity
+//! - Level C (easy): Even simpler API
 //!
 //! Run with: cargo run --example cube_window
 
-use epicx::dx12::{Device, CommandQueue, SwapChain, SwapChainConfig, CommandAllocator, CommandList};
+use epicx::graphics::{Graphics, GraphicsConfig};
+use epicx::math::Color;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -16,14 +16,11 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows::Win32::Foundation::HWND;
-use windows::Win32::Graphics::Direct3D12::*;
 
+/// Application state - MUCH SIMPLER with Level B!
 struct App {
     window: Option<Window>,
-    device: Option<Device>,
-    command_queue: Option<CommandQueue>,
-    swap_chain: Option<SwapChain>,
-    allocator: Option<CommandAllocator>,
+    graphics: Option<Graphics>,  // Just ONE struct instead of 5!
     start_time: Instant,
     frame_count: u64,
     last_fps_time: Instant,
@@ -34,10 +31,7 @@ impl App {
     fn new() -> Self {
         Self {
             window: None,
-            device: None,
-            command_queue: None,
-            swap_chain: None,
-            allocator: None,
+            graphics: None,
             start_time: Instant::now(),
             frame_count: 0,
             last_fps_time: Instant::now(),
@@ -45,11 +39,9 @@ impl App {
         }
     }
     
+    /// Render a frame - SIMPLIFIED!
     fn render(&mut self) {
-        let Some(device) = &self.device else { return };
-        let Some(command_queue) = &mut self.command_queue else { return };
-        let Some(swap_chain) = &mut self.swap_chain else { return };
-        let Some(allocator) = &self.allocator else { return };
+        let Some(graphics) = &mut self.graphics else { return };
         let Some(window) = &self.window else { return };
         
         // Calculate time
@@ -64,90 +56,34 @@ impl App {
             self.last_fps_time = Instant::now();
             
             window.set_title(&format!(
-                "EPICX - Rotating Cube | FPS: {:.1} | Time: {:.1}s",
+                "EPICX - Level B Demo | FPS: {:.1} | Time: {:.1}s",
                 self.fps, elapsed
             ));
         }
         
         // Animated clear color
-        let clear_color = [
+        let color = Color::new(
             0.1 + 0.1 * (elapsed * 0.5).sin(),
             0.15 + 0.1 * (elapsed * 0.7).cos(),
             0.2 + 0.1 * (elapsed * 0.3).sin(),
             1.0,
-        ];
+        );
         
-        // Reset allocator
-        if let Err(e) = allocator.reset() {
-            eprintln!("[EPICX] Allocator reset error: {:?}", e);
-            return;
-        }
-        
-        // Create command list
-        let cmd_list = match CommandList::new(device, allocator, None) {
-            Ok(list) => list,
+        // BEGIN FRAME - Level B handles all the complexity!
+        let frame = match graphics.begin_frame() {
+            Ok(f) => f,
             Err(e) => {
-                eprintln!("[EPICX] Command list error: {:?}", e);
+                eprintln!("[EPICX] Begin frame error: {:?}", e);
                 return;
             }
         };
         
-        // Get current back buffer and RTV
-        let back_buffer = swap_chain.current_back_buffer();
-        let rtv = swap_chain.current_rtv();
+        // CLEAR - Just one line!
+        frame.clear(color);
         
-        unsafe {
-            // Transition to render target
-            let barrier = D3D12_RESOURCE_BARRIER {
-                Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
-                Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
-                Anonymous: D3D12_RESOURCE_BARRIER_0 {
-                    Transition: std::mem::ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
-                        pResource: std::mem::transmute_copy(back_buffer),
-                        Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
-                        StateBefore: D3D12_RESOURCE_STATE_PRESENT,
-                        StateAfter: D3D12_RESOURCE_STATE_RENDER_TARGET,
-                    }),
-                },
-            };
-            cmd_list.raw().ResourceBarrier(&[barrier]);
-            
-            // Clear render target
-            cmd_list.raw().ClearRenderTargetView(rtv, &clear_color, None);
-            
-            // Transition back to present
-            let barrier = D3D12_RESOURCE_BARRIER {
-                Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
-                Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
-                Anonymous: D3D12_RESOURCE_BARRIER_0 {
-                    Transition: std::mem::ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
-                        pResource: std::mem::transmute_copy(back_buffer),
-                        Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
-                        StateBefore: D3D12_RESOURCE_STATE_RENDER_TARGET,
-                        StateAfter: D3D12_RESOURCE_STATE_PRESENT,
-                    }),
-                },
-            };
-            cmd_list.raw().ResourceBarrier(&[barrier]);
-        }
-        
-        // Close and execute
-        if let Err(e) = cmd_list.close() {
-            eprintln!("[EPICX] Command list close error: {:?}", e);
-            return;
-        }
-        
-        command_queue.execute(&[&cmd_list]);
-        
-        // Present
-        if let Err(e) = swap_chain.present() {
-            eprintln!("[EPICX] Present error: {:?}", e);
-            return;
-        }
-        
-        // Wait for GPU
-        if let Err(e) = command_queue.flush() {
-            eprintln!("[EPICX] Flush error: {:?}", e);
+        // END FRAME - Level B handles present, barriers, sync!
+        if let Err(e) = graphics.end_frame(frame) {
+            eprintln!("[EPICX] End frame error: {:?}", e);
         }
     }
 }
@@ -155,17 +91,21 @@ impl App {
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         println!("╔══════════════════════════════════════════════════════════════╗");
-        println!("║      EPICX - DirectX12 Real-time Renderer                    ║");
+        println!("║      EPICX - Level B Graphics Demo (SIMPLIFIED!)             ║");
         println!("╠══════════════════════════════════════════════════════════════╣");
-        println!("║  Controls:                                                   ║");
-        println!("║  - ESC: Exit                                                 ║");
-        println!("║  - Animated background color                                 ║");
+        println!("║  This example uses Level B (graphics module)                 ║");
+        println!("║  which encapsulates ALL of Level A (dx12 module)             ║");
+        println!("║                                                              ║");
+        println!("║  Before: Device + CommandQueue + SwapChain + Allocator + ... ║");
+        println!("║  After:  Just Graphics!                                      ║");
+        println!("║                                                              ║");
+        println!("║  Controls: ESC to exit                                       ║");
         println!("╚══════════════════════════════════════════════════════════════╝");
         println!();
         
         // Create window
         let window_attrs = Window::default_attributes()
-            .with_title("EPICX - Rotating Cube")
+            .with_title("EPICX - Level B Demo")
             .with_inner_size(winit::dpi::LogicalSize::new(1280, 720));
         
         let window = event_loop.create_window(window_attrs).expect("Failed to create window");
@@ -177,36 +117,20 @@ impl ApplicationHandler for App {
             _ => panic!("Unsupported platform"),
         };
         
-        // Initialize DirectX12
-        println!("[EPICX] Initializing DirectX12...");
-        let device = Device::new(true).expect("Failed to create device");
-        println!("[EPICX] Device created");
-        
-        let command_queue = CommandQueue::graphics(&device).expect("Failed to create command queue");
-        println!("[EPICX] Command queue created");
-        
-        let config = SwapChainConfig {
+        // SIMPLIFIED: Just create Graphics with config!
+        println!("[EPICX] Creating Graphics (Level B)...");
+        let config = GraphicsConfig {
             width: size.width,
             height: size.height,
-            buffer_count: 2,
             ..Default::default()
         };
         
-        let swap_chain = SwapChain::new(&device, &command_queue, hwnd, config)
-            .expect("Failed to create swap chain");
-        println!("[EPICX] Swap chain created ({}x{})", size.width, size.height);
-        
-        let allocator = CommandAllocator::new(&device, D3D12_COMMAND_LIST_TYPE_DIRECT)
-            .expect("Failed to create allocator");
-        println!("[EPICX] Command allocator created");
-        
+        let graphics = Graphics::new(hwnd, config).expect("Failed to create graphics");
+        println!("[EPICX] Graphics created ({}x{}) - All DX12 resources encapsulated!", size.width, size.height);
         println!("[EPICX] Starting render loop...\n");
         
         self.window = Some(window);
-        self.device = Some(device);
-        self.command_queue = Some(command_queue);
-        self.swap_chain = Some(swap_chain);
-        self.allocator = Some(allocator);
+        self.graphics = Some(graphics);
     }
     
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -224,11 +148,8 @@ impl ApplicationHandler for App {
             WindowEvent::Resized(new_size) => {
                 if new_size.width > 0 && new_size.height > 0 {
                     println!("[EPICX] Resizing to {}x{}", new_size.width, new_size.height);
-                    if let (Some(device), Some(swap_chain)) = (&self.device, &mut self.swap_chain) {
-                        if let Some(queue) = &mut self.command_queue {
-                            let _ = queue.flush();
-                        }
-                        let _ = swap_chain.resize(device, new_size.width, new_size.height);
+                    if let Some(graphics) = &mut self.graphics {
+                        let _ = graphics.resize(new_size.width, new_size.height);
                     }
                 }
             }
