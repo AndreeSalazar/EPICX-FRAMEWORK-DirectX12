@@ -14,7 +14,7 @@ mod shader;
 
 pub use device::Device;
 pub use command_queue::{CommandQueue, CommandList, CommandAllocator};
-pub use swap_chain::SwapChain;
+pub use swap_chain::{SwapChain, SwapChainConfig};
 pub use pipeline::{Pipeline, PipelineState, RootSignature};
 pub use buffer::{Buffer, BufferDesc, BufferUsage, VertexBuffer, IndexBuffer, ConstantBuffer};
 pub use texture::{Texture, TextureDesc, RenderTarget, DepthStencil};
