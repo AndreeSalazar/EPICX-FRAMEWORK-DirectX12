@@ -1,9 +1,59 @@
-   0.330561300s  INFO prepare_target{force=false package_id=epicx v0.1.0 (C:\Users\andre\OneDrive\Documentos\EPICX) target="component_demo"}: cargo::core::compiler::fingerprint: dependency on `epicx` is newer than we are 13411167256.014141500s > 13411165137.129651600s "C:\\Users\\andre\\OneDrive\\Documentos\\EPICX"
-   0.330826300s  INFO prepare_target{force=false package_id=epicx v0.1.0 (C:\Users\andre\OneDrive\Documentos\EPICX) target="component_demo"}: cargo::core::compiler::fingerprint: fingerprint dirty for epicx v0.1.0 (C:\Users\andre\OneDrive\Documentos\EPICX)/Check { test: false }/TargetInner { kind: "example", name: "component_demo", tested: false, benched: false, ..: with_path("C:\\Users\\andre\\OneDrive\\Documentos\\EPICX\\examples\\component_demo.rs", Edition2021) }
-   0.330858700s  INFO prepare_target{force=false package_id=epicx v0.1.0 (C:\Users\andre\OneDrive\Documentos\EPICX) target="component_demo"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDependency { name: "epicx", dep_mtime: FileTime { seconds: 13411167256, nanos: 14141500 }, max_mtime: FileTime { seconds: 13411165137, nanos: 129651600 } })
-   0.333315700s  INFO prepare_target{force=false package_id=epicx v0.1.0 (C:\Users\andre\OneDrive\Documentos\EPICX) target="hello_triangle"}: cargo::core::compiler::fingerprint: dependency on `epicx` is newer than we are 13411167256.014141500s > 13411165137.106736200s "C:\\Users\\andre\\OneDrive\\Documentos\\EPICX"
-   0.333577400s  INFO prepare_target{force=false package_id=epicx v0.1.0 (C:\Users\andre\OneDrive\Documentos\EPICX) target="hello_triangle"}: cargo::core::compiler::fingerprint: fingerprint dirty for epicx v0.1.0 (C:\Users\andre\OneDrive\Documentos\EPICX)/Check { test: false }/TargetInner { kind: "example", name: "hello_triangle", tested: false, benched: false, ..: with_path("C:\\Users\\andre\\OneDrive\\Documentos\\EPICX\\examples\\hello_triangle.rs", Edition2021) }
-   0.333601400s  INFO prepare_target{force=false package_id=epicx v0.1.0 (C:\Users\andre\OneDrive\Documentos\EPICX) target="hello_triangle"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDependency { name: "epicx", dep_mtime: FileTime { seconds: 13411167256, nanos: 14141500 }, max_mtime: FileTime { seconds: 13411165137, nanos: 106736200 } })
+   0.208597500s  INFO prepare_target{force=false package_id=epicx v0.1.0 (C:\Users\andre\OneDrive\Documentos\EPICX) target="component_demo"}: cargo::core::compiler::fingerprint: fingerprint error for epicx v0.1.0 (C:\Users\andre\OneDrive\Documentos\EPICX)/Check { test: false }/TargetInner { kind: "example", name: "component_demo", tested: false, benched: false, ..: with_path("C:\\Users\\andre\\OneDrive\\Documentos\\EPICX\\examples\\component_demo.rs", Edition2021) }
+   0.208657900s  INFO prepare_target{force=false package_id=epicx v0.1.0 (C:\Users\andre\OneDrive\Documentos\EPICX) target="component_demo"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\andre\OneDrive\Documentos\EPICX\target\debug\.fingerprint\epicx-32249a6853430853\example-component_demo`
+
+Caused by:
+    El sistema no puede encontrar el archivo especificado. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_libgit2_prerelease
+  12: <unknown>
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: git_midx_writer_dump
+  17: git_filter_source_repo
+  18: git_midx_writer_dump
+  19: BaseThreadInitThunk
+  20: RtlUserThreadStart
+   0.222398000s  INFO prepare_target{force=false package_id=epicx v0.1.0 (C:\Users\andre\OneDrive\Documentos\EPICX) target="hello_triangle"}: cargo::core::compiler::fingerprint: fingerprint error for epicx v0.1.0 (C:\Users\andre\OneDrive\Documentos\EPICX)/Check { test: false }/TargetInner { kind: "example", name: "hello_triangle", tested: false, benched: false, ..: with_path("C:\\Users\\andre\\OneDrive\\Documentos\\EPICX\\examples\\hello_triangle.rs", Edition2021) }
+   0.222427400s  INFO prepare_target{force=false package_id=epicx v0.1.0 (C:\Users\andre\OneDrive\Documentos\EPICX) target="hello_triangle"}: cargo::core::compiler::fingerprint:     err: failed to read `C:\Users\andre\OneDrive\Documentos\EPICX\target\debug\.fingerprint\epicx-d97c4783d1fd6795\example-hello_triangle`
+
+Caused by:
+    El sistema no puede encontrar el archivo especificado. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_libgit2_prerelease
+  12: <unknown>
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: git_midx_writer_dump
+  17: git_filter_source_repo
+  18: git_midx_writer_dump
+  19: BaseThreadInitThunk
+  20: RtlUserThreadStart
     Checking epicx v0.1.0 (C:\Users\andre\OneDrive\Documentos\EPICX)
 error: could not compile `epicx` (example "hello_triangle") due to 1 previous error
 warning: build failed, waiting for other jobs to finish...

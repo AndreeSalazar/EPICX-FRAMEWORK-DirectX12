@@ -53,6 +53,9 @@ raw-window-handle = "0.6"
 # Winit for window creation
 winit = "0.30"
 
+# Software rendering buffer for displaying pixels
+softbuffer = "0.4"
+
 [dev-dependencies]
 criterion = "0.5"
 

@@ -11,10 +11,12 @@ mod texture;
 mod descriptor_heap;
 mod fence;
 mod shader;
+pub mod gpu_info;
 
 pub use device::Device;
 pub use command_queue::{CommandQueue, CommandList, CommandAllocator};
 pub use swap_chain::{SwapChain, SwapChainConfig};
+pub use gpu_info::{GpuDetector, GpuInfo, GpuVendor, detect_gpu};
 pub use pipeline::{Pipeline, PipelineState, RootSignature};
 pub use buffer::{Buffer, BufferDesc, BufferUsage, VertexBuffer, IndexBuffer, ConstantBuffer};
 pub use texture::{Texture, TextureDesc, RenderTarget, DepthStencil};
