@@ -203,12 +203,12 @@ impl App {
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, el: &ActiveEventLoop) {
-        println!("\n╔═══════════════════════════════════════════════════════════════╗");
-        println!("║         EPICX - High Performance Rotating Cube               ║");
-        println!("║                                                               ║");
-        println!("║  Optimized software rasterizer - NO VSYNC                     ║");
-        println!("║  Press ESC to exit                                            ║");
-        println!("╚═══════════════════════════════════════════════════════════════╝\n");
+        println!("\n╔═════════════════════════════════════════════════════════════════╗");
+        println!(  "║         EPICX - High Performance Rotating Cube                  ║");
+        println!(  "║                                                                 ║");
+        println!(  "║  Optimized software rasterizer - NO VSYNC                       ║");
+        println!(  "║  Press ESC to exit                                              ║");
+        println!(  "╚═════════════════════════════════════════════════════════════════╝\n");
 
         // GPU Detection
         unsafe {

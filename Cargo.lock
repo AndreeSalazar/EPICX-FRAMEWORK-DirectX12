@@ -572,7 +572,7 @@ dependencies = [
 
 [[package]]
 name = "epicx"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "criterion",
  "env_logger",

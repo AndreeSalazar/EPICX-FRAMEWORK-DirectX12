@@ -1,10 +1,10 @@
 [package]
 name = "epicx"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 authors = ["EPICX Team"]
 description = "A React-inspired DirectX12 graphics framework for Rust"
-license = "MIT"
+license-file = "LICENSE"
 repository = "https://github.com/epicx/epicx"
 keywords = ["graphics", "directx12", "dx12", "react", "ui"]
 categories = ["graphics", "rendering", "game-development"]
@@ -66,12 +66,8 @@ async = ["tokio"]
 validation = []
 
 [[example]]
-name = "hello_triangle"
-path = "examples/hello_triangle.rs"
-
-[[example]]
-name = "component_demo"
-path = "examples/component_demo.rs"
+name = "cube_dx12"
+path = "examples/cube_dx12.rs"
 
 [profile.release]
 lto = true
