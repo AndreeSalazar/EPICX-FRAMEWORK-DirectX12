@@ -1,85 +1,147 @@
-# BMOX — un cubo 3D por versión de Direct3D
+# estudio-d3d
 
-Laboratorio para estudiar cómo evoluciona la API de Direct3D (9 → 10 → 11 → 12) y
-portearla a **BMO-X**. Cada carpeta dibuja **el mismo cubo** (misma geometría, misma
-cámara, misma luz, mismo fondo), así que lo único que cambia entre ellas es la API.
+> **Estudio en Windows; no es BMO-X ni se porta tal cual.**
+>
+> Es un envoltorio de la API de Microsoft (Direct3D 9, 10, 11 y 12) para estudiar cómo se
+> comporta. Nada de lo que llama a Windows cruza a BMO-X. Lo que sí puede cruzar está en
+> [`../cubo-neutro`](../cubo-neutro): malla, matrices, luz y un rasterizador por CPU, en
+> `no_std` y sin dependencias.
 
 ```
-BMOX/
-├── base/       lo común: ventana Win32, cubo (24 vértices / 36 índices), matrices, compilador HLSL
-├── BMOX-9/     Direct3D 9   (2002)  → bmox9::Bmox9
-├── BMOX-10/    Direct3D 10  (2006)  → bmox10::Bmox10
-├── BMOX-11/    Direct3D 11  (2009)  → bmox11::Bmox11
-└── BMOX-12/    Direct3D 12  (2015)  → bmox12::Bmox12
+cubo-neutro/          (raíz del repo) no_std, sin dependencias: lo portable
+estudio-d3d/
+├── base/             ventana Win32, bucle, D3DCompile, PNG           (Windows)
+├── cpu/              estudio_cpu (el juez a PNG) y comparar          (sin Direct3D)
+├── d3d9/  d3d10/  d3d11/  d3d12/   un cubo por versión              (Windows)
+├── referencia/       PNG de DX12 y CPU, fotogramas 0, 30 y 60
+├── scripts/          referencia.ps1, reglas.ps1, medir.ps1, censo.ps1
+├── DICCIONARIO.md    cada llamada: qué hace con la memoria y con la sincronización
+└── CENSO.md          DLL y funciones que importa cada .exe
 ```
 
-Cada versión tiene 3 archivos: `main.rs` (5 líneas), `bmoxN.rs` (toda la API) y `cubo.hlsl`.
-Todas implementan el mismo trait `BmoxRender { fn dibujar(&mut self, &Constantes) }`, así
-BMO-X puede elegir el backend sin tocar el resto.
+Los cuatro cubos toman de `cubo-neutro` la malla, las matrices y la luz: CPU y GPU parten de
+los mismos números. La rotación depende del **número de fotograma** (1° por fotograma), no
+del reloj.
 
-## Ejecutar
+## Uso
 
 ```bash
-cargo run -p bmox9 --release
-cargo run -p bmox10 --release
-cargo run -p bmox11 --release
-cargo run -p bmox12 --release
+cargo run -p estudio_d3d12 --release
 ```
 
-ESC o cerrar la ventana termina y muestra el promedio de FPS. `VSYNC` está en
-[`base/src/lib.rs`](base/src/lib.rs) (por defecto `false`, igual que el ejemplo de EPICX).
+| Argumento | Qué hace |
+|---|---|
+| (ninguno) | Interactivo con VSync. ESC sale. |
+| `--sin-vsync` | Interactivo sin VSync. |
+| `--fotograma N [--salida ruta.png]` | Dibuja solo el fotograma N en una ventana oculta, lee el back buffer, lo guarda como PNG y sale. |
+| `--medir N` | Dibuja los fotogramas 0..N-1 sin VSync e imprime los FPS. |
+| `--corregir-medio-pixel` | Solo D3D9: desplaza la geometría −0.5 px (ver abajo). |
 
-## Qué cambia en cada versión
+`estudio_cpu --fotograma N [--salida ruta.png]` hace lo mismo con el rasterizador de
+`cubo-neutro`. Tiene una opción para apagar o cambiar cada una de las 4 reglas:
+`--centro-entero`, `--subpixel-mitad-arriba`, `--viewport-normalizado` y `--unorm-12bits`.
+`scripts/reglas.ps1` las demuestra (tabla en [`../cubo-neutro/README.md`](../cubo-neutro/README.md)).
+`comparar a.png b.png [--mapa m.png] [--listar N]` cuenta los
+píxeles distintos.
 
-| Concepto | D3D9 | D3D10 | D3D11 | D3D12 |
+## GPU contra CPU
+
+Medido en esta máquina: NVIDIA GeForce RTX 3060, Windows 11, 1280×720, **sin antialiasing**
+(`SampleDesc.Count = 1` en todas las versiones, `MultisampleEnable = FALSE`). Para repetirlo:
+
+```bash
+powershell -ExecutionPolicy Bypass -File scripts/referencia.ps1
+```
+
+Píxeles distintos respecto a `referencia/cpu/` (921 600 por imagen):
+
+| | f0000 | f0030 | f0060 |
+|---|---:|---:|---:|
+| **DX12** (`referencia/dx12/`) | **0** | **0** | **0** |
+| D3D11 | 0 | 0 | 0 |
+| D3D10 | 0 | 0 | 0 |
+| D3D9 | 536 | 732 | 677 |
+| D3D9 `--corregir-medio-pixel` | 0 | 0 | 0 |
+
+Tres fotogramas pueden salir bien por casualidad, así que también se barrió la vuelta completa:
+
+```bash
+powershell -ExecutionPolicy Bypass -File scripts/referencia.ps1 -Barrido 1
+```
+
+DX12 contra CPU en los fotogramas 0..359:
+
+| Juez | Fotogramas con diferencias | Píxeles distintos | De ellos, diferencia de 1 en un canal | Otra cara u otro fondo |
+|---|---:|---:|---:|---:|
+| `dibujar_por_cpu` (redondeo exacto a 8 bits) | 37 de 360 | 1 491 885 | 1 491 884 | 1 |
+| `--unorm-12bits` | 1 de 360 | 1 | 0 | 1 |
+
+### Lo que se aprendió al hacerlos coincidir
+
+Cada punto salió de una diferencia medida, no de la documentación:
+
+1. **D3D9 pone los centros de píxel en coordenadas enteras.** D3D10+ los pone en +0.5. Las
+   536–732 diferencias de D3D9 son todas de borde, y desaparecen al mover la geometría medio
+   píxel en el vertex shader (`--corregir-medio-pixel`). Al portar desde D3D9 hay que tenerlo en cuenta.
+2. **Ajuste a subpíxel con redondeo al par.** La GPU pasa las posiciones a punto fijo de 1/256
+   de píxel. Un vértice en x·256 = 218350.5 exacto (fotograma 60) caía en otro subpíxel si se
+   redondeaba "mitades hacia arriba". Ahora `num::redondear_par` lo resuelve, y el test
+   `redondeo_al_par` guarda ese caso.
+3. **El orden de las operaciones del viewport importa en `f32`.** Con x·256 ≈ 2·10⁵, un `f32`
+   solo distingue 1/64 de subpíxel. `(ndc·0.5 + 0.5)·ancho` y `ndc·(ancho/2) + ancho/2` dan
+   resultados distintos, y la GPU coincide con el segundo.
+4. **La conversión a 8 bits de esta GPU no es `round(x·255)`.** Todas las diferencias de 1 en un
+   canal desaparecen si se modela como "truncar a 12 bits (`floor(x·4096)`) y luego redondear".
+   D3D permite 0,6 unidades de error en esa conversión, así que es legal y puede cambiar en otra
+   GPU. Por eso el juez (`Reglas::D3D10`) sigue usando el redondeo exacto, y el modelo de
+   12 bits (`a_unorm8_truncar_12`) hay que pedirlo aparte.
+5. **Queda 1 píxel sin explicar** (fotograma 32, píxel 523,199: la GPU pinta la cara
+   verde y la CPU el fondo). Un vértice cae a 1/256 de subpíxel de un empate. Se probaron FMA en
+   el vertex shader, cinco órdenes para el viewport y ±1 ulp en `1/w`, y ninguno lo reproduce.
+
+## Rendimiento
+
+Sin VSync, 20 000 fotogramas, 3 corridas por versión (`--medir 20000`):
+
+```bash
+powershell -ExecutionPolicy Bypass -File scripts/medir.ps1
+```
+
+| | D3D9 | D3D10 | D3D11 | D3D12 |
 |---|---|---|---|---|
-| Objeto que dibuja | `IDirect3DDevice9` | `ID3D10Device` | `ID3D11DeviceContext` | `ID3D12GraphicsCommandList` |
-| Objeto que crea recursos | el mismo device | el mismo device | `ID3D11Device` | `ID3D12Device` |
-| Swap chain | dentro del device (`D3DPRESENT_PARAMETERS`) | DXGI (`DISCARD`) | DXGI (`DISCARD`) | DXGI flip model (`FLIP_DISCARD`, 2 buffers) sobre la **cola** |
-| Depth buffer | automático (`EnableAutoDepthStencil`) | textura + DSV | textura + DSV | recurso + heap DSV |
-| Formato de vértice | `IDirect3DVertexDeclaration9` | input layout | input layout | input layout dentro del PSO |
-| Constantes | registros `c0..c7` (`SetVertexShaderConstantF`) | constant buffer b0 | constant buffer b0 | root CBV b0 (ranuras de 256 bytes por frame) |
-| Estado | `SetRenderState` suelto | objetos de estado | objetos de estado | todo en un **PSO** inmutable |
-| Shaders | SM3 (`vs_3_0`), opcionales | SM4 obligatorio | SM5 | SM5 con FXC (SM6 necesita DXC) |
-| Semánticas HLSL | `POSITION` / `COLOR0` | `SV_POSITION` / `SV_TARGET` | igual | igual |
-| Escribir buffers | `Lock` / `Unlock` | `UpdateSubresource` | `UpdateSubresource` | `Map` persistente en heap UPLOAD |
-| Sincronización CPU↔GPU | la hace el driver | la hace el driver | la hace el driver | **tú**: fences + eventos |
-| Transiciones de recursos | driver | driver | driver | **tú**: `ResourceBarrier` |
-| Pérdida de device | sí: `TestCooperativeLevel` + `Reset` | no | no | (device removed, no se maneja aquí) |
-| Líneas en `bmoxN.rs` | 183 | 183 | 190 | 410 |
+| FPS (3 corridas) | 8833 · 8502 · 8535 | 9444 · 9380 · 9479 | 9451 · 9387 · 9504 | 3952 · 3790 · 3610 |
 
-### Medido en esta máquina (RTX 3060, 1280×720, sin VSync, ~3 s)
+El rasterizador por CPU (un hilo, mismo 1280×720) tardó 5,5 / 4,6 / 4,8 ms en los fotogramas
+0 / 30 / 60, según la salida de `estudio_cpu` en la misma corrida.
 
-| | BMOX-9 | BMOX-10 | BMOX-11 | BMOX-12 |
-|---|---|---|---|---|
-| FPS promedio | ~8 700 | ~9 200 | ~8 900 | ~6 000 |
+Estas cifras son de esta máquina en ese momento, y cambian con la carga del sistema. Con un
+solo cubo no se mide el costo de dibujar: domina el ciclo de presentar y esperar. D3D12 hace
+en cada fotograma lo que en 9/10/11 hace el driver (espera por fence, reinicio del allocator,
+barreras), y presenta con flip model a través del compositor. No se midió cuál de esas partes
+pesa más.
 
-Con un solo cubo, el cuello de botella es el ciclo presentar/esperar y no la GPU. BMOX-12 da
-menos FPS porque espera al fence en cada frame y usa flip model en ventana sin
-`DXGI_FEATURE_PRESENT_ALLOW_TEARING`. D3D12 gana cuando hay miles de draw calls o varios
-hilos grabando command lists, y eso con un cubo no se ve.
+D3D12 sin VSync necesita `DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING` + `DXGI_PRESENT_ALLOW_TEARING`.
+Sin eso, el compositor retiene el buffer mostrado hasta el refresco y `Present(0)` queda atado
+al monitor. El cubo lo activa si el sistema lo soporta, e imprime `tearing: sí/no` al arrancar.
 
-## Qué es igual en las cuatro (y vive en `base`)
+## Tamaño del código
 
-- Sistema de mano izquierda, profundidad 0..1 (`look_at_lh`, `perspective_lh`).
-- Caras frontales en sentido horario; se descartan las traseras (es el valor por defecto en todas las versiones).
-- Matrices subidas por columnas (`to_cols_array`) y `mul(M, v)` en HLSL. Funciona igual con
-  registros D3D9 y con cbuffers, porque el empaquetado por defecto de HLSL es `column_major`.
-- Shaders compilados en tiempo de ejecución con `D3DCompile` (d3dcompiler_47.dll, viene con Windows).
-  D3DX9 ya no está en el SDK moderno, así que D3D9 también usa `D3DCompile`.
+Líneas por archivo (`(Get-Content archivo).Count`):
 
-## Límites (a propósito, para que el código se lea fácil)
+| `d3d9/…/cubo_d3d9.rs` | `d3d10/…/cubo_d3d10.rs` | `d3d11/…/cubo_d3d11.rs` | `d3d12/…/cubo_d3d12.rs` | `base/src/lib.rs` | `cubo-neutro/src/*.rs` |
+|---:|---:|---:|---:|---:|---:|
+| 204 | 216 | 226 | 495 | 274 | 717 |
 
-- La ventana tiene tamaño fijo, así que no se recrea el swap chain al redimensionar.
-- No hay capa de debug (`D3D12GetDebugInterface` / `D3D11_CREATE_DEVICE_DEBUG`), porque requiere
-  instalar "Graphics Tools" en Windows.
-- En BMOX-12 los vértices viven en un heap UPLOAD. Un motor real los copia a un heap DEFAULT
-  con una command list de copia.
-- DX7 y DX8 quedaron fuera: `d3d8.dll` solo existe en 32 bits en Windows 11 y el SDK no trae
-  `d3d8.h`. DX7 es DirectDraw + pipeline fijo.
+## Límites (a propósito)
+
+- La ventana tiene tamaño fijo, así que nunca se recrea el swap chain.
+- No hay capa de debug de D3D (requiere instalar "Graphics Tools").
+- En D3D12, los vértices viven en un heap UPLOAD. Un motor real los copia a DEFAULT.
+- D3D7/D3D8 quedaron fuera: `d3d8.dll` solo existe en 32 bits en este Windows 11 y el SDK no
+  trae `d3d8.h`.
 
 ## Relación con EPICX
 
-`examples/cube_dx12.rs` (en la raíz del repo) **no dibuja con DirectX 12**: es un rasterizador
-por software (`softbuffer`) y usa DXGI solo para detectar la GPU. `BMOX-12` es el primer cubo del
-repo que sí se dibuja con D3D12 en la GPU, y sirve de base para completar `src/dx12/`.
+`examples/cube_dx12.rs` (en la raíz del repo) dibuja en la CPU con `softbuffer`; de DX12 solo
+usa DXGI para detectar la GPU. `estudio-d3d/d3d12` es el primer cubo del repo que dibuja con
+D3D12 en la GPU.
