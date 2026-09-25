@@ -1,9 +1,9 @@
-//! BMOX-11: cubo 3D con Direct3D 11.
+//! Estudio: cubo 3D con Direct3D 11.
 //!
-//! cargo run -p bmox11 --release
+//! cargo run -p estudio_d3d11 --release [-- --fotograma N | --medir N | --sin-vsync]
 
-mod bmox11;
+mod cubo_d3d11;
 
 fn main() -> windows::core::Result<()> {
-    bmox_base::ejecutar("BMOX-11 Cube (Direct3D 11)", bmox11::Bmox11::nuevo)
+    estudio_base::ejecutar("Estudio D3D11", cubo_d3d11::CuboD3d11::nuevo)
 }

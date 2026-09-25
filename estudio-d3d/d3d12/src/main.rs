@@ -1,9 +1,9 @@
-//! BMOX-12: cubo 3D con Direct3D 12.
+//! Estudio: cubo 3D con Direct3D 12.
 //!
-//! cargo run -p bmox12 --release
+//! cargo run -p estudio_d3d12 --release [-- --fotograma N | --medir N | --sin-vsync]
 
-mod bmox12;
+mod cubo_d3d12;
 
 fn main() -> windows::core::Result<()> {
-    bmox_base::ejecutar("BMOX-12 Cube (Direct3D 12)", bmox12::Bmox12::nuevo)
+    estudio_base::ejecutar("Estudio D3D12", cubo_d3d12::CuboD3d12::nuevo)
 }

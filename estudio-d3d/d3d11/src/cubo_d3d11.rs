@@ -1,4 +1,4 @@
-//! # BMOX-11 → Direct3D 11 (2009, Windows 7)
+//! # Direct3D 11 (2009, Windows 7)
 //!
 //! Qué cambia frente a D3D10:
 //! - El device se divide en dos objetos:
@@ -12,7 +12,7 @@
 
 use std::mem::size_of;
 
-use bmox_base::{compilar_hlsl, cubo, BmoxRender, Constantes, Vertice, COLOR_FONDO, VSYNC};
+use estudio_base::{compilar_hlsl, cubo_neutro, rgba_a_argb, Config, Constantes, Renderizador, Vertice};
 use windows::core::{s, Result};
 use windows::Win32::Foundation::{HMODULE, HWND, TRUE};
 use windows::Win32::Graphics::Direct3D::*;
@@ -22,9 +22,11 @@ use windows::Win32::Graphics::Dxgi::*;
 
 const HLSL: &str = include_str!("cubo.hlsl");
 
-pub struct Bmox11 {
+pub struct CuboD3d11 {
+    dispositivo: ID3D11Device,
     contexto: ID3D11DeviceContext,
     swap: IDXGISwapChain,
+    back_buffer: ID3D11Texture2D,
     rtv: ID3D11RenderTargetView,
     dsv: ID3D11DepthStencilView,
     layout: ID3D11InputLayout,
@@ -34,17 +36,17 @@ pub struct Bmox11 {
     ib: ID3D11Buffer,
     cb: ID3D11Buffer,
     viewport: D3D11_VIEWPORT,
-    num_indices: u32,
-    _dispositivo: ID3D11Device,
+    config: Config,
 }
 
-impl Bmox11 {
-    pub fn nuevo(hwnd: HWND, ancho: u32, alto: u32) -> Result<Self> {
+impl CuboD3d11 {
+    pub fn nuevo(hwnd: HWND, config: &Config) -> Result<Self> {
+        let (ancho, alto) = (config.ancho, config.alto);
         unsafe {
             // 1) Device + immediate context + swap chain (mismo DXGI_SWAP_CHAIN_DESC que D3D10)
             let desc_swap = DXGI_SWAP_CHAIN_DESC {
                 BufferDesc: DXGI_MODE_DESC { Width: ancho, Height: alto, Format: DXGI_FORMAT_R8G8B8A8_UNORM, ..Default::default() },
-                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 }, // sin MSAA
                 BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
                 BufferCount: 1,
                 OutputWindow: hwnd,
@@ -70,7 +72,7 @@ impl Bmox11 {
             )?;
             let (swap, dispositivo, contexto): (IDXGISwapChain, ID3D11Device, ID3D11DeviceContext) =
                 (swap.unwrap(), dispositivo.unwrap(), contexto.unwrap());
-            println!("[BMOX-11] feature level: {}.{}", nivel.0 >> 12, (nivel.0 >> 8) & 0xF);
+            println!("[Estudio D3D11] feature level: {}.{}", nivel.0 >> 12, (nivel.0 >> 8) & 0xF);
 
             // 2) Render target view sobre el back buffer
             let back_buffer: ID3D11Texture2D = swap.GetBuffer(0)?;
@@ -119,17 +121,20 @@ impl Bmox11 {
             let mut layout = None;
             dispositivo.CreateInputLayout(&elementos, &codigo_vs, Some(&mut layout))?;
 
-            // 5) Buffers
-            let (vertices, indices) = cubo();
-            let vb = crear_buffer(&dispositivo, D3D11_BIND_VERTEX_BUFFER, size_of::<Vertice>() * vertices.len(), Some(vertices.as_ptr() as _))?;
-            let ib = crear_buffer(&dispositivo, D3D11_BIND_INDEX_BUFFER, size_of::<u16>() * indices.len(), Some(indices.as_ptr() as _))?;
+            // 5) Buffers: malla de cubo-neutro
+            let vertices = cubo_neutro::vertices();
+            let indices = cubo_neutro::indices();
+            let vb = crear_buffer(&dispositivo, D3D11_BIND_VERTEX_BUFFER, size_of_val(&vertices), Some(vertices.as_ptr() as _))?;
+            let ib = crear_buffer(&dispositivo, D3D11_BIND_INDEX_BUFFER, size_of_val(&indices), Some(indices.as_ptr() as _))?;
             let cb = crear_buffer(&dispositivo, D3D11_BIND_CONSTANT_BUFFER, size_of::<Constantes>(), None)?;
 
             let viewport = D3D11_VIEWPORT { TopLeftX: 0.0, TopLeftY: 0.0, Width: ancho as f32, Height: alto as f32, MinDepth: 0.0, MaxDepth: 1.0 };
 
             Ok(Self {
+                dispositivo,
                 contexto,
                 swap,
+                back_buffer,
                 rtv: rtv.unwrap(),
                 dsv: dsv.unwrap(),
                 layout: layout.unwrap(),
@@ -139,10 +144,37 @@ impl Bmox11 {
                 ib,
                 cb,
                 viewport,
-                num_indices: indices.len() as u32,
-                _dispositivo: dispositivo,
+                config: *config,
             })
         }
+    }
+
+    /// Back buffer → textura STAGING → `destino`. El `Map` lo hace el context, no la textura.
+    fn capturar(&self, destino: &mut [u32]) -> Result<()> {
+        unsafe {
+            let desc = D3D11_TEXTURE2D_DESC {
+                Width: self.config.ancho,
+                Height: self.config.alto,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                Usage: D3D11_USAGE_STAGING,
+                BindFlags: 0,
+                CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+                MiscFlags: 0,
+            };
+            let mut staging = None;
+            self.dispositivo.CreateTexture2D(&desc, None, Some(&mut staging))?;
+            let staging = staging.unwrap();
+            let ctx = &self.contexto;
+            ctx.CopyResource(&staging, &self.back_buffer);
+            let mut m = D3D11_MAPPED_SUBRESOURCE::default();
+            ctx.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut m))?; // bloquea hasta que la copia termina
+            estudio_base::copiar_filas(m.pData as *const u8, m.RowPitch as usize, self.config.ancho, self.config.alto, destino, rgba_a_argb);
+            ctx.Unmap(&staging, 0);
+        }
+        Ok(())
     }
 }
 
@@ -161,8 +193,8 @@ fn crear_buffer(d: &ID3D11Device, uso: D3D11_BIND_FLAG, bytes: usize, datos: Opt
     Ok(buffer.unwrap())
 }
 
-impl BmoxRender for Bmox11 {
-    fn dibujar(&mut self, c: &Constantes) -> Result<()> {
+impl Renderizador for CuboD3d11 {
+    fn dibujar(&mut self, c: &Constantes, captura: Option<&mut [u32]>) -> Result<()> {
         unsafe {
             // Todo el dibujo pasa por el context, no por el device
             let ctx = &self.contexto;
@@ -170,7 +202,7 @@ impl BmoxRender for Bmox11 {
 
             ctx.OMSetRenderTargets(Some(&[Some(self.rtv.clone())]), &self.dsv);
             ctx.RSSetViewports(Some(&[self.viewport]));
-            ctx.ClearRenderTargetView(&self.rtv, &COLOR_FONDO);
+            ctx.ClearRenderTargetView(&self.rtv, &cubo_neutro::FONDO_F);
             ctx.ClearDepthStencilView(&self.dsv, D3D11_CLEAR_DEPTH.0 as u32, 1.0, 0);
 
             let stride = size_of::<Vertice>() as u32;
@@ -182,9 +214,13 @@ impl BmoxRender for Bmox11 {
             ctx.VSSetShader(&self.vs, None);
             ctx.VSSetConstantBuffers(0, Some(&[Some(self.cb.clone())]));
             ctx.PSSetShader(&self.ps, None);
+            ctx.PSSetConstantBuffers(0, Some(&[Some(self.cb.clone())]));
 
-            ctx.DrawIndexed(self.num_indices, 0, 0);
-            self.swap.Present(if VSYNC { 1 } else { 0 }, DXGI_PRESENT(0)).ok()
+            ctx.DrawIndexed(cubo_neutro::NUM_INDICES as u32, 0, 0);
+            if let Some(destino) = captura {
+                self.capturar(destino)?;
+            }
+            self.swap.Present(self.config.vsync as u32, DXGI_PRESENT(0)).ok()
         }
     }
 }

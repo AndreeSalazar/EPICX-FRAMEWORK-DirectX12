@@ -1,23 +1,24 @@
-//! # BMOX base
+//! # estudio_base (solo Windows)
 //!
-//! Todo lo que es IGUAL en las cuatro versiones, para que cada carpeta
-//! (`BMOX-9` … `BMOX-12`) muestre solo lo que cambia de la API gráfica:
+//! Lo que comparten los cuatro cubos D3D y que es **de Windows**: ventana Win32,
+//! bucle de mensajes, compilador HLSL (d3dcompiler_47.dll) y escritura de PNG.
+//! La malla, las matrices y la luz NO están aquí: vienen de `cubo-neutro`.
 //!
-//! - Ventana Win32 + bucle de mensajes (`ejecutar`)
-//! - Geometría del cubo: 24 vértices (4 por cara) + 36 índices (`cubo`)
-//! - Matrices World / View / Projection con glam (`constantes`)
-//! - Compilación HLSL en tiempo de ejecución con d3dcompiler_47 (`compilar_hlsl`)
-//!
-//! Convenciones compartidas por todas las versiones:
-//! - Sistema de mano izquierda (el de Direct3D), profundidad 0..1.
-//! - Caras frontales en sentido horario → se descartan las traseras (cull back).
-//! - Matrices subidas en orden de columnas (`to_cols_array`) y en HLSL `mul(M, v)`.
+//! Modos (argumentos de línea de comandos, iguales en los cuatro .exe):
+//! - sin argumentos:        interactivo con VSync; la rotación avanza un paso por fotograma.
+//! - `--sin-vsync`:         interactivo sin VSync (gira tan rápido como dibuja).
+//! - `--fotograma N`:       dibuja solo el fotograma N en una ventana oculta, lo guarda como
+//!                          PNG (`--salida ruta.png`, por defecto `cubo_fNNNN.png`) y sale.
+//! - `--medir N`:           dibuja los fotogramas 0..N sin VSync y muestra los FPS.
+//! - `--corregir-medio-pixel`: solo D3D9; desplaza la geometría -0.5 px para usar la
+//!                          convención de centros de píxel de D3D10+ (las demás lo ignoran).
 
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use glam::{Mat4, Vec3};
+pub use cubo_neutro::{self, Constantes, Vertice};
 use windows::core::{w, Error, Result, HSTRING, PCSTR};
-use windows::Win32::Foundation::{E_FAIL, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{E_FAIL, E_INVALIDARG, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
 use windows::Win32::Graphics::Direct3D::ID3DBlob;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -26,70 +27,147 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 pub const ANCHO: u32 = 1280;
 pub const ALTO: u32 = 720;
 
-/// `false` = sin VSync (FPS máximos, como el ejemplo de EPICX) para comparar
-/// el rendimiento entre versiones. Ponlo en `true` para limitar a la frecuencia del monitor.
-pub const VSYNC: bool = false;
-
-/// Mismo fondo que `examples/cube_dx12.rs` (0xFF101018).
-pub const COLOR_FONDO: [f32; 4] = [0x10 as f32 / 255.0, 0x10 as f32 / 255.0, 0x18 as f32 / 255.0, 1.0];
-
-/// Formato de vértice común: posición + normal + color (40 bytes).
-#[repr(C)]
+/// Lo que recibe cada cubo al crearse.
 #[derive(Clone, Copy, Debug)]
-pub struct Vertice {
-    pub pos: [f32; 3],
-    pub normal: [f32; 3],
-    pub color: [f32; 4],
+pub struct Config {
+    pub ancho: u32,
+    pub alto: u32,
+    pub vsync: bool,
+    /// Solo D3D9: compensar que sus centros de píxel están en enteros y no en +0.5.
+    pub corregir_medio_pixel: bool,
 }
 
-/// Constantes por frame (128 bytes, múltiplo de 16 como exige un constant buffer).
-/// - D3D9: registros c0..c3 (WVP) y c4..c7 (World)
-/// - D3D10/11/12: `cbuffer` en el registro b0
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct Constantes {
-    pub wvp: [f32; 16],
-    pub world: [f32; 16],
+/// Lo único que cada versión D3D implementa.
+pub trait Renderizador {
+    /// Dibuja un fotograma y lo presenta. Si `captura` es `Some`, antes de presentar copia
+    /// el back buffer ahí como `0xAARRGGBB`, fila 0 arriba (el formato de `cubo-neutro`).
+    fn dibujar(&mut self, c: &Constantes, captura: Option<&mut [u32]>) -> Result<()>;
 }
 
-/// Lo único que cada versión BMOX tiene que implementar: dibujar un frame.
-pub trait BmoxRender {
-    fn dibujar(&mut self, c: &Constantes) -> Result<()>;
+enum Modo {
+    Interactivo,
+    Fotograma { n: u32, salida: PathBuf },
+    Medir { n: u32 },
 }
 
-/// Cubo de lado 2 centrado en el origen, con un color por cara.
-/// Se usan 24 vértices (y no 8) porque cada cara necesita su propia normal.
-pub fn cubo() -> (Vec<Vertice>, Vec<u16>) {
-    // (normal, u, v, color) con u × v = -normal: así los vértices
-    // (-u+v, u+v, u-v, -u-v) quedan en sentido horario vistos desde fuera.
-    let caras: [([f32; 3], [f32; 3], [f32; 3], [f32; 4]); 6] = [
-        ([0.0, 0.0, -1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.19, 0.88, 0.19, 1.0]), // frente: verde
-        ([0.0, 0.0, 1.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.88, 0.19, 0.19, 1.0]), // atrás: rojo
-        ([1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [0.88, 0.88, 0.19, 1.0]),  // derecha: amarillo
-        ([-1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], [0.19, 0.19, 0.88, 1.0]), // izquierda: azul
-        ([0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.88, 0.19, 0.88, 1.0]),  // arriba: magenta
-        ([0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.19, 0.88, 0.88, 1.0]), // abajo: cian
-    ];
-
-    let mut vertices = Vec::with_capacity(24);
-    let mut indices = Vec::with_capacity(36);
-    for (n, u, v, color) in caras {
-        let (n, u, v) = (Vec3::from(n), Vec3::from(u), Vec3::from(v));
-        let base = vertices.len() as u16;
-        for (a, b) in [(-1.0, 1.0), (1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)] {
-            vertices.push(Vertice { pos: (n + u * a + v * b).into(), normal: n.into(), color });
+fn leer_argumentos() -> Result<(Modo, bool, bool)> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let numero = |i: usize| -> Result<u32> {
+        args.get(i + 1).and_then(|s| s.parse().ok()).ok_or_else(|| Error::new(E_INVALIDARG, format!("{} espera un número", args[i])))
+    };
+    let mut modo = Modo::Interactivo;
+    let mut vsync = true;
+    let mut medio_pixel = false;
+    let mut salida = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--fotograma" => {
+                modo = Modo::Fotograma { n: numero(i)?, salida: PathBuf::new() };
+                i += 1;
+            }
+            "--medir" => {
+                modo = Modo::Medir { n: numero(i)? };
+                i += 1;
+            }
+            "--salida" => {
+                salida = args.get(i + 1).map(PathBuf::from);
+                i += 1;
+            }
+            "--sin-vsync" => vsync = false,
+            "--corregir-medio-pixel" => medio_pixel = true,
+            otro => return Err(Error::new(E_INVALIDARG, format!("argumento desconocido: {otro}"))),
         }
-        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        i += 1;
     }
-    (vertices, indices)
+    if let Modo::Fotograma { n, salida: s } = &mut modo {
+        *s = salida.unwrap_or_else(|| PathBuf::from(format!("cubo_f{n:04}.png")));
+    }
+    Ok((modo, vsync, medio_pixel))
 }
 
-/// World (rotación) · View (cámara) · Projection (perspectiva) para el tiempo `t` en segundos.
-pub fn constantes(t: f32, aspecto: f32) -> Constantes {
-    let world = Mat4::from_rotation_y(t) * Mat4::from_rotation_x(t * 0.7);
-    let view = Mat4::look_at_lh(Vec3::new(0.0, 1.5, -5.0), Vec3::ZERO, Vec3::Y);
-    let proj = Mat4::perspective_lh(60f32.to_radians(), aspecto, 0.1, 100.0);
-    Constantes { wvp: (proj * view * world).to_cols_array(), world: world.to_cols_array() }
+fn constantes_de(fotograma: u32) -> Constantes {
+    cubo_neutro::constantes(cubo_neutro::angulo_de_fotograma(fotograma), ANCHO as f32 / ALTO as f32)
+}
+
+/// Punto de entrada común de los cuatro .exe.
+pub fn ejecutar<R: Renderizador>(titulo: &str, crear: impl FnOnce(HWND, &Config) -> Result<R>) -> Result<()> {
+    let (modo, vsync, corregir_medio_pixel) = leer_argumentos()?;
+    let config = |vsync| Config { ancho: ANCHO, alto: ALTO, vsync, corregir_medio_pixel };
+    match modo {
+        Modo::Fotograma { n, salida } => {
+            let hwnd = crear_ventana(titulo, false)?;
+            let mut render = crear(hwnd, &config(false))?;
+            let mut pixeles = vec![0u32; (ANCHO * ALTO) as usize];
+            render.dibujar(&constantes_de(n), Some(&mut pixeles))?;
+            guardar_png(&salida, ANCHO, ALTO, &pixeles).map_err(|e| Error::new(E_FAIL, format!("{}: {e}", salida.display())))?;
+            println!("[{titulo}] fotograma {n} -> {}", salida.display());
+            Ok(())
+        }
+        Modo::Medir { n } => {
+            let hwnd = crear_ventana(titulo, true)?;
+            let mut render = crear(hwnd, &config(false))?;
+            let inicio = Instant::now();
+            for f in 0..n {
+                if !atender_mensajes() {
+                    break;
+                }
+                render.dibujar(&constantes_de(f), None)?;
+            }
+            let seg = inicio.elapsed().as_secs_f64();
+            println!("[{titulo}] {n} fotogramas en {seg:.3} s -> {:.0} FPS", n as f64 / seg);
+            Ok(())
+        }
+        Modo::Interactivo => {
+            let hwnd = crear_ventana(titulo, true)?;
+            let mut render = crear(hwnd, &config(vsync))?;
+            println!("[{titulo}] VSync {}. ESC para salir.", if vsync { "sí" } else { "no" });
+            let mut fotograma = 0u32;
+            let mut t_fps = Instant::now();
+            let mut cuenta = 0u32;
+            while atender_mensajes() {
+                render.dibujar(&constantes_de(fotograma), None)?;
+                fotograma = fotograma.wrapping_add(1);
+                cuenta += 1;
+                let dt = t_fps.elapsed().as_secs_f32();
+                if dt >= 0.5 {
+                    let texto = HSTRING::from(format!("{titulo} | fotograma {fotograma} | FPS: {:.0}", cuenta as f32 / dt));
+                    unsafe { SetWindowTextW(hwnd, &texto)? };
+                    cuenta = 0;
+                    t_fps = Instant::now();
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Procesa los mensajes pendientes. Devuelve `false` cuando llega WM_QUIT.
+fn atender_mensajes() -> bool {
+    let mut msg = MSG::default();
+    unsafe {
+        while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+            if msg.message == WM_QUIT {
+                return false;
+            }
+            let _ = TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
+    true
+}
+
+/// PNG RGB de 8 bits a partir de píxeles `0xAARRGGBB` (se descarta el alfa).
+pub fn guardar_png(ruta: &Path, ancho: u32, alto: u32, pixeles: &[u32]) -> std::io::Result<()> {
+    if let Some(dir) = ruta.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir)?;
+    }
+    let rgb: Vec<u8> = pixeles.iter().flat_map(|p| [(p >> 16) as u8, (p >> 8) as u8, *p as u8]).collect();
+    let mut enc = png::Encoder::new(std::io::BufWriter::new(std::fs::File::create(ruta)?), ancho, alto);
+    enc.set_color(png::ColorType::Rgb);
+    enc.set_depth(png::BitDepth::Eight);
+    enc.write_header()?.write_image_data(&rgb)?;
+    Ok(())
 }
 
 /// Compila HLSL con `D3DCompile` (d3dcompiler_47.dll, incluido en Windows).
@@ -98,19 +176,7 @@ pub fn compilar_hlsl(fuente: &str, entrada: PCSTR, perfil: PCSTR) -> Result<Vec<
     let mut codigo: Option<ID3DBlob> = None;
     let mut errores: Option<ID3DBlob> = None;
     let r = unsafe {
-        D3DCompile(
-            fuente.as_ptr() as _,
-            fuente.len(),
-            None,
-            None,
-            None,
-            entrada,
-            perfil,
-            0,
-            0,
-            &mut codigo,
-            Some(&mut errores),
-        )
+        D3DCompile(fuente.as_ptr() as _, fuente.len(), None, None, None, entrada, perfil, 0, 0, &mut codigo, Some(&mut errores))
     };
     if let Err(e) = r {
         let msg = errores.map(|b| String::from_utf8_lossy(bytes_blob(&b)).into_owned()).unwrap_or_default();
@@ -129,49 +195,29 @@ pub fn error(msg: &str) -> Error {
     Error::new(E_FAIL, msg)
 }
 
-/// Crea la ventana, construye el renderizador con `crear` y corre el bucle hasta ESC o cerrar.
-/// El título muestra los FPS cada medio segundo.
-pub fn ejecutar<R: BmoxRender>(titulo: &str, crear: impl FnOnce(HWND, u32, u32) -> Result<R>) -> Result<()> {
-    let hwnd = crear_ventana(titulo)?;
-    let mut render = crear(hwnd, ANCHO, ALTO)?;
-    println!("[{titulo}] listo. ESC para salir.");
-
-    let inicio = Instant::now();
-    let mut t_fps = Instant::now();
-    let mut frames = 0u32;
-    let mut total = 0u64;
-    loop {
-        let mut msg = MSG::default();
-        while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.as_bool() {
-            if msg.message == WM_QUIT {
-                let seg = inicio.elapsed().as_secs_f32();
-                println!("[{titulo}] {total} frames en {seg:.2}s -> promedio {:.0} FPS", total as f32 / seg);
-                return Ok(());
-            }
-            unsafe {
-                let _ = TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-            }
-        }
-
-        render.dibujar(&constantes(inicio.elapsed().as_secs_f32(), ANCHO as f32 / ALTO as f32))?;
-
-        frames += 1;
-        total += 1;
-        let dt = t_fps.elapsed().as_secs_f32();
-        if dt >= 0.5 {
-            let texto = HSTRING::from(format!("{titulo} | FPS: {:.0}", frames as f32 / dt));
-            unsafe { SetWindowTextW(hwnd, &texto)? };
-            frames = 0;
-            t_fps = Instant::now();
+/// Copia filas de `alto` × `ancho` píxeles desde memoria con `pitch` bytes por fila,
+/// convirtiendo cada píxel con `convertir`.
+///
+/// # Safety
+/// `origen` debe apuntar a `alto * pitch` bytes legibles.
+pub unsafe fn copiar_filas(origen: *const u8, pitch: usize, ancho: u32, alto: u32, destino: &mut [u32], convertir: impl Fn(u32) -> u32) {
+    for y in 0..alto as usize {
+        let fila = std::slice::from_raw_parts(origen.add(y * pitch) as *const u32, ancho as usize);
+        for (x, p) in fila.iter().enumerate() {
+            destino[y * ancho as usize + x] = convertir(*p);
         }
     }
 }
 
-fn crear_ventana(titulo: &str) -> Result<HWND> {
+/// R8G8B8A8_UNORM leído como u32 little-endian (0xAABBGGRR) → 0xFFRRGGBB.
+pub fn rgba_a_argb(p: u32) -> u32 {
+    0xFF00_0000 | ((p & 0xFF) << 16) | (p & 0xFF00) | ((p >> 16) & 0xFF)
+}
+
+fn crear_ventana(titulo: &str, visible: bool) -> Result<HWND> {
     unsafe {
         let instancia = GetModuleHandleW(None)?;
-        let clase = w!("BMOX");
+        let clase = w!("EstudioD3D");
         let wc = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
             style: CS_HREDRAW | CS_VREDRAW,
@@ -185,17 +231,19 @@ fn crear_ventana(titulo: &str) -> Result<HWND> {
             return Err(Error::from_win32());
         }
 
-        // Tamaño fijo: sin bordes redimensionables ni maximizar, así ningún ejemplo
-        // necesita recrear el swap chain (eso se estudia aparte).
-        let estilo = WINDOW_STYLE(WS_OVERLAPPEDWINDOW.0 & !(WS_THICKFRAME.0 | WS_MAXIMIZEBOX.0));
+        // Tamaño fijo: ningún ejemplo necesita recrear el swap chain.
+        let mut estilo = WINDOW_STYLE(WS_OVERLAPPEDWINDOW.0 & !(WS_THICKFRAME.0 | WS_MAXIMIZEBOX.0));
         let mut rect = RECT { left: 0, top: 0, right: ANCHO as i32, bottom: ALTO as i32 };
         AdjustWindowRect(&mut rect, estilo, false)?;
+        if visible {
+            estilo |= WS_VISIBLE;
+        }
 
-        let hwnd = CreateWindowExW(
+        CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             clase,
             &HSTRING::from(titulo),
-            estilo | WS_VISIBLE,
+            estilo,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             rect.right - rect.left,
@@ -204,8 +252,7 @@ fn crear_ventana(titulo: &str) -> Result<HWND> {
             None,
             instancia,
             None,
-        )?;
-        Ok(hwnd)
+        )
     }
 }
 

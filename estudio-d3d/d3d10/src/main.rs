@@ -1,9 +1,9 @@
-//! BMOX-10: cubo 3D con Direct3D 10.
+//! Estudio: cubo 3D con Direct3D 10.
 //!
-//! cargo run -p bmox10 --release
+//! cargo run -p estudio_d3d10 --release [-- --fotograma N | --medir N | --sin-vsync]
 
-mod bmox10;
+mod cubo_d3d10;
 
 fn main() -> windows::core::Result<()> {
-    bmox_base::ejecutar("BMOX-10 Cube (Direct3D 10)", bmox10::Bmox10::nuevo)
+    estudio_base::ejecutar("Estudio D3D10", cubo_d3d10::CuboD3d10::nuevo)
 }

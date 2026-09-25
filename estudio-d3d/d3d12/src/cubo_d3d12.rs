@@ -1,4 +1,4 @@
-//! # BMOX-12 → Direct3D 12 (2015, Windows 10)
+//! # Direct3D 12 (2015, Windows 10)
 //!
 //! D3D12 deja de hacer cosas "por ti". Lo que D3D9/10/11 hacían dentro del driver
 //! ahora lo hace la aplicación:
@@ -11,16 +11,20 @@
 //! - **Root signature**: define qué recursos ve cada shader (aquí: 1 root CBV en b0).
 //! - **Pipeline State Object (PSO)**: shaders + input layout + rasterizer + blend + depth,
 //!   todo compilado en UN objeto inmutable (en D3D11 eran estados sueltos).
-//! - **Memoria explícita**: tú eliges el heap (UPLOAD, DEFAULT…). Por simplicidad, los
-//!   vértices e índices viven en un heap UPLOAD (lo típico en un primer ejemplo; en un
-//!   motor real se copian a un heap DEFAULT).
-//! - Swap chain obligatoriamente "flip model" (FLIP_DISCARD) con 2+ buffers.
+//! - **Memoria explícita**: tú eliges el heap (UPLOAD, DEFAULT, READBACK). Por simplicidad,
+//!   los vértices e índices viven en un heap UPLOAD (en un motor real se copian a DEFAULT).
+//! - Swap chain obligatoriamente "flip model" (FLIP_DISCARD) con 2+ buffers. Sin VSync hace falta
+//!   `ALLOW_TEARING`: si no, el compositor (DWM) retiene el buffer mostrado hasta el siguiente
+//!   refresco y `Present(0)` queda atado al monitor aunque no haya VSync.
+//!
+//! Al crearse imprime cuánta memoria pide cada recurso y cuánta asigna el driver
+//! (`GetResourceAllocationInfo`): esas son las cifras de DICCIONARIO.md.
 
 use std::mem::{size_of, transmute_copy, ManuallyDrop};
 
-use bmox_base::{compilar_hlsl, cubo, error, BmoxRender, Constantes, Vertice, COLOR_FONDO, VSYNC};
+use estudio_base::{compilar_hlsl, cubo_neutro, error, rgba_a_argb, Config, Constantes, Renderizador, Vertice};
 use windows::core::{s, Interface, Result};
-use windows::Win32::Foundation::{CloseHandle, FALSE, HANDLE, HWND, RECT, TRUE};
+use windows::Win32::Foundation::{CloseHandle, BOOL, FALSE, HANDLE, HWND, RECT, TRUE};
 use windows::Win32::Graphics::Direct3D::*;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -31,11 +35,18 @@ const HLSL: &str = include_str!("cubo.hlsl");
 
 /// Frames en vuelo = número de back buffers.
 const FRAMES: usize = 2;
-/// Los constant buffers en D3D12 deben estar alineados a 256 bytes.
+/// Cada constant buffer debe empezar en múltiplo de 256 bytes
+/// (D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT).
 const TAM_CB: usize = 256;
 
-pub struct Bmox12 {
-    _dispositivo: ID3D12Device,
+/// Memoria de lectura para `--fotograma`: el back buffer se copia aquí.
+struct Readback {
+    buffer: ID3D12Resource,
+    huella: D3D12_PLACED_SUBRESOURCE_FOOTPRINT,
+}
+
+pub struct CuboD3d12 {
+    dispositivo: ID3D12Device,
     cola: ID3D12CommandQueue,
     swap: IDXGISwapChain3,
     heap_rtv: ID3D12DescriptorHeap,
@@ -53,24 +64,37 @@ pub struct Bmox12 {
     ibv: D3D12_INDEX_BUFFER_VIEW,
     cb: ID3D12Resource,
     cb_ptr: *mut u8,
+    readback: Option<Readback>,
     fence: ID3D12Fence,
     valores_fence: [u64; FRAMES],
     ultimo_fence: u64,
     evento: HANDLE,
     viewport: D3D12_VIEWPORT,
     scissor: RECT,
-    num_indices: u32,
+    config: Config,
+    /// `Present(0, ALLOW_TEARING)` cuando no hay VSync y el sistema lo soporta.
+    tearing: bool,
 }
 
-impl Bmox12 {
-    pub fn nuevo(hwnd: HWND, ancho: u32, alto: u32) -> Result<Self> {
+/// Imprime bytes pedidos y bytes que el driver reserva para `desc`.
+fn informar(d: &ID3D12Device, nombre: &str, desc: &D3D12_RESOURCE_DESC, pedidos: u64) {
+    let info = unsafe { d.GetResourceAllocationInfo(0, &[*desc]) };
+    println!(
+        "[memoria] {nombre:<28} pedidos {pedidos:>9} B  asignados {:>9} B  alineación {:>7} B",
+        info.SizeInBytes, info.Alignment
+    );
+}
+
+impl CuboD3d12 {
+    pub fn nuevo(hwnd: HWND, config: &Config) -> Result<Self> {
+        let (ancho, alto) = (config.ancho, config.alto);
         unsafe {
             // 1) Fábrica DXGI + adaptador de alto rendimiento + device
             let fabrica: IDXGIFactory6 = CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0))?;
             let adaptador: IDXGIAdapter1 = fabrica.EnumAdapterByGpuPreference(0, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE)?;
             let desc = adaptador.GetDesc1()?;
             let fin = desc.Description.iter().position(|&c| c == 0).unwrap_or(desc.Description.len());
-            println!("[BMOX-12] GPU: {}", String::from_utf16_lossy(&desc.Description[..fin]));
+            println!("[Estudio D3D12] GPU: {}", String::from_utf16_lossy(&desc.Description[..fin]));
 
             let mut dispositivo: Option<ID3D12Device> = None;
             D3D12CreateDevice(&adaptador, D3D_FEATURE_LEVEL_11_0, &mut dispositivo)?;
@@ -82,15 +106,23 @@ impl Bmox12 {
                 ..Default::default()
             })?;
 
-            // 3) Swap chain flip model
+            // 3) Swap chain flip model. Sin VSync se pide ALLOW_TEARING si el sistema lo soporta.
+            let mut soporta_tearing = FALSE;
+            let tearing = !config.vsync
+                && fabrica
+                    .CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &mut soporta_tearing as *mut _ as _, size_of::<BOOL>() as u32)
+                    .is_ok()
+                && soporta_tearing.as_bool();
+            println!("[Estudio D3D12] tearing (VSync apagado de verdad en flip model): {}", if tearing { "sí" } else { "no" });
             let desc_swap = DXGI_SWAP_CHAIN_DESC1 {
                 Width: ancho,
                 Height: alto,
                 Format: DXGI_FORMAT_R8G8B8A8_UNORM,
-                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 }, // sin MSAA
                 BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
                 BufferCount: FRAMES as u32,
                 SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
+                Flags: if tearing { DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING.0 as u32 } else { 0 },
                 ..Default::default()
             };
             let swap: IDXGISwapChain3 = fabrica.CreateSwapChainForHwnd(&cola, hwnd, &desc_swap, None, None)?.cast()?;
@@ -108,12 +140,17 @@ impl Bmox12 {
                 NumDescriptors: 1,
                 ..Default::default()
             })?;
+            println!(
+                "[memoria] descriptor RTV {tam_rtv} B, DSV {} B (GetDescriptorHandleIncrementSize)",
+                dispositivo.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV)
+            );
 
             let inicio_rtv = heap_rtv.GetCPUDescriptorHandleForHeapStart();
             let mut render_targets = Vec::with_capacity(FRAMES);
             for i in 0..FRAMES {
                 let rt: ID3D12Resource = swap.GetBuffer(i as u32)?;
                 dispositivo.CreateRenderTargetView(&rt, None, D3D12_CPU_DESCRIPTOR_HANDLE { ptr: inicio_rtv.ptr + i * tam_rtv });
+                informar(&dispositivo, &format!("back buffer {i} RGBA8"), &rt.GetDesc(), ancho as u64 * alto as u64 * 4);
                 render_targets.push(rt);
             }
 
@@ -129,6 +166,7 @@ impl Bmox12 {
                 Flags: D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL,
                 ..Default::default()
             };
+            informar(&dispositivo, "depth D32 (DEFAULT)", &desc_prof, ancho as u64 * alto as u64 * 4);
             let limpiar = D3D12_CLEAR_VALUE {
                 Format: DXGI_FORMAT_D32_FLOAT,
                 Anonymous: D3D12_CLEAR_VALUE_0 { DepthStencil: D3D12_DEPTH_STENCIL_VALUE { Depth: 1.0, Stencil: 0 } },
@@ -145,11 +183,11 @@ impl Bmox12 {
             let profundidad = profundidad.unwrap();
             dispositivo.CreateDepthStencilView(&profundidad, None, heap_dsv.GetCPUDescriptorHandleForHeapStart());
 
-            // 6) Root signature: un solo parámetro = CBV en b0, visible para el vertex shader
+            // 6) Root signature: un solo parámetro = CBV en b0, visible para VS y PS
             let parametro = D3D12_ROOT_PARAMETER {
                 ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
                 Anonymous: D3D12_ROOT_PARAMETER_0 { Descriptor: D3D12_ROOT_DESCRIPTOR { ShaderRegister: 0, RegisterSpace: 0 } },
-                ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
+                ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
             };
             let desc_firma = D3D12_ROOT_SIGNATURE_DESC {
                 NumParameters: 1,
@@ -159,7 +197,7 @@ impl Bmox12 {
             };
             let mut blob_firma = None;
             D3D12SerializeRootSignature(&desc_firma, D3D_ROOT_SIGNATURE_VERSION_1, &mut blob_firma, None)?;
-            let firma_raiz: ID3D12RootSignature = dispositivo.CreateRootSignature(0, bmox_base::bytes_blob(&blob_firma.unwrap()))?;
+            let firma_raiz: ID3D12RootSignature = dispositivo.CreateRootSignature(0, estudio_base::bytes_blob(&blob_firma.unwrap()))?;
 
             // 7) PSO: shaders + input layout + estados, todo en un objeto
             let codigo_vs = compilar_hlsl(HLSL, s!("VSMain"), s!("vs_5_0"))?;
@@ -202,7 +240,7 @@ impl Bmox12 {
                     FillMode: D3D12_FILL_MODE_SOLID,
                     CullMode: D3D12_CULL_MODE_BACK,
                     DepthClipEnable: TRUE,
-                    ..Default::default()
+                    ..Default::default() // MultisampleEnable/AntialiasedLineEnable = FALSE
                 },
                 DepthStencilState: D3D12_DEPTH_STENCIL_DESC {
                     DepthEnable: TRUE,
@@ -220,12 +258,13 @@ impl Bmox12 {
             desc_pso.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
             let pso: ID3D12PipelineState = dispositivo.CreateGraphicsPipelineState(&desc_pso)?;
 
-            // 8) Vertex/index buffers (heap UPLOAD) + sus "views"
-            let (vertices, indices) = cubo();
-            let bytes_vb = size_of::<Vertice>() * vertices.len();
-            let bytes_ib = size_of::<u16>() * indices.len();
-            let vb = buffer_subida(&dispositivo, bytes_vb)?;
-            let ib = buffer_subida(&dispositivo, bytes_ib)?;
+            // 8) Vertex/index buffers (heap UPLOAD) + sus "views", malla de cubo-neutro
+            let vertices = cubo_neutro::vertices();
+            let indices = cubo_neutro::indices();
+            let bytes_vb = size_of_val(&vertices);
+            let bytes_ib = size_of_val(&indices);
+            let vb = buffer(&dispositivo, "vertex buffer (UPLOAD)", bytes_vb, D3D12_HEAP_TYPE_UPLOAD)?;
+            let ib = buffer(&dispositivo, "index buffer (UPLOAD)", bytes_ib, D3D12_HEAP_TYPE_UPLOAD)?;
             copiar(&vb, &vertices)?;
             copiar(&ib, &indices)?;
             let vbv = D3D12_VERTEX_BUFFER_VIEW {
@@ -240,7 +279,7 @@ impl Bmox12 {
             };
 
             // 9) Constant buffer: una ranura de 256 bytes por frame, mapeado para siempre
-            let cb = buffer_subida(&dispositivo, TAM_CB * FRAMES)?;
+            let cb = buffer(&dispositivo, "constant buffer (UPLOAD)", TAM_CB * FRAMES, D3D12_HEAP_TYPE_UPLOAD)?;
             let mut cb_ptr = std::ptr::null_mut();
             cb.Map(0, Some(&D3D12_RANGE { Begin: 0, End: 0 }), Some(&mut cb_ptr))?;
 
@@ -256,7 +295,7 @@ impl Bmox12 {
             let evento = CreateEventW(None, FALSE, FALSE, None)?;
 
             Ok(Self {
-                _dispositivo: dispositivo,
+                dispositivo,
                 cola,
                 swap,
                 heap_rtv,
@@ -274,13 +313,15 @@ impl Bmox12 {
                 ibv,
                 cb,
                 cb_ptr: cb_ptr as *mut u8,
+                readback: None,
                 fence,
                 valores_fence: [0; FRAMES],
                 ultimo_fence: 0,
                 evento,
                 viewport: D3D12_VIEWPORT { TopLeftX: 0.0, TopLeftY: 0.0, Width: ancho as f32, Height: alto as f32, MinDepth: 0.0, MaxDepth: 1.0 },
                 scissor: RECT { left: 0, top: 0, right: ancho as i32, bottom: alto as i32 },
-                num_indices: indices.len() as u32,
+                config: *config,
+                tearing,
             })
         }
     }
@@ -295,9 +336,25 @@ impl Bmox12 {
         }
         Ok(())
     }
+
+    /// Buffer READBACK con la huella (row pitch alineado a 256) que pide `CopyTextureRegion`.
+    fn preparar_readback(&mut self) -> Result<()> {
+        if self.readback.is_some() {
+            return Ok(());
+        }
+        unsafe {
+            let desc_rt = self.render_targets[0].GetDesc();
+            let mut huella = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+            let mut total = 0u64;
+            self.dispositivo.GetCopyableFootprints(&desc_rt, 0, 1, 0, Some(&mut huella), None, None, Some(&mut total));
+            let buffer = buffer(&self.dispositivo, "readback (READBACK)", total as usize, D3D12_HEAP_TYPE_READBACK)?;
+            self.readback = Some(Readback { buffer, huella });
+        }
+        Ok(())
+    }
 }
 
-fn buffer_subida(d: &ID3D12Device, bytes: usize) -> Result<ID3D12Resource> {
+fn buffer(d: &ID3D12Device, nombre: &str, bytes: usize, tipo: D3D12_HEAP_TYPE) -> Result<ID3D12Resource> {
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
         Width: bytes as u64,
@@ -308,16 +365,12 @@ fn buffer_subida(d: &ID3D12Device, bytes: usize) -> Result<ID3D12Resource> {
         Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
         ..Default::default()
     };
+    informar(d, nombre, &desc, bytes as u64);
+    // UPLOAD: la CPU escribe y la GPU lee → GENERIC_READ. READBACK: la GPU escribe → COPY_DEST.
+    let estado = if tipo == D3D12_HEAP_TYPE_READBACK { D3D12_RESOURCE_STATE_COPY_DEST } else { D3D12_RESOURCE_STATE_GENERIC_READ };
     let mut recurso = None;
     unsafe {
-        d.CreateCommittedResource(
-            &D3D12_HEAP_PROPERTIES { Type: D3D12_HEAP_TYPE_UPLOAD, ..Default::default() },
-            D3D12_HEAP_FLAG_NONE,
-            &desc,
-            D3D12_RESOURCE_STATE_GENERIC_READ,
-            None,
-            &mut recurso,
-        )?;
+        d.CreateCommittedResource(&D3D12_HEAP_PROPERTIES { Type: tipo, ..Default::default() }, D3D12_HEAP_FLAG_NONE, &desc, estado, None, &mut recurso)?;
     }
     recurso.ok_or_else(|| error("CreateCommittedResource no devolvió recurso"))
 }
@@ -348,10 +401,14 @@ fn transicion(recurso: &ID3D12Resource, antes: D3D12_RESOURCE_STATES, despues: D
     }
 }
 
-impl BmoxRender for Bmox12 {
-    fn dibujar(&mut self, c: &Constantes) -> Result<()> {
+impl Renderizador for CuboD3d12 {
+    fn dibujar(&mut self, c: &Constantes, captura: Option<&mut [u32]>) -> Result<()> {
+        if captura.is_some() {
+            self.preparar_readback()?;
+        }
         unsafe {
             let i = self.swap.GetCurrentBackBufferIndex() as usize;
+            let rt = &self.render_targets[i];
 
             // 1) Esperar a que la GPU termine el frame que usó esta ranura la vez anterior
             self.esperar_gpu(self.valores_fence[i])?;
@@ -370,35 +427,63 @@ impl BmoxRender for Bmox12 {
             l.RSSetViewports(&[self.viewport]);
             l.RSSetScissorRects(&[self.scissor]);
 
-            l.ResourceBarrier(&[transicion(&self.render_targets[i], D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET)]);
+            l.ResourceBarrier(&[transicion(rt, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET)]);
 
             let rtv = D3D12_CPU_DESCRIPTOR_HANDLE { ptr: self.heap_rtv.GetCPUDescriptorHandleForHeapStart().ptr + i * self.tam_rtv };
             let dsv = self.heap_dsv.GetCPUDescriptorHandleForHeapStart();
             l.OMSetRenderTargets(1, Some(&rtv), FALSE, Some(&dsv));
-            l.ClearRenderTargetView(rtv, &COLOR_FONDO, None);
+            l.ClearRenderTargetView(rtv, &cubo_neutro::FONDO_F, None);
             l.ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0, 0, &[]);
 
             l.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             l.IASetVertexBuffers(0, Some(&[self.vbv]));
             l.IASetIndexBuffer(Some(&self.ibv));
-            l.DrawIndexedInstanced(self.num_indices, 1, 0, 0, 0);
+            l.DrawIndexedInstanced(cubo_neutro::NUM_INDICES as u32, 1, 0, 0, 0);
 
-            l.ResourceBarrier(&[transicion(&self.render_targets[i], D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT)]);
+            if let Some(rb) = &self.readback {
+                // Captura: RENDER_TARGET → COPY_SOURCE, copiar al buffer READBACK, → PRESENT
+                l.ResourceBarrier(&[transicion(rt, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE)]);
+                let destino = D3D12_TEXTURE_COPY_LOCATION {
+                    pResource: transmute_copy(&rb.buffer),
+                    Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+                    Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { PlacedFootprint: rb.huella },
+                };
+                let origen = D3D12_TEXTURE_COPY_LOCATION {
+                    pResource: transmute_copy(rt),
+                    Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+                    Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { SubresourceIndex: 0 },
+                };
+                l.CopyTextureRegion(&destino, 0, 0, 0, &origen, None);
+                l.ResourceBarrier(&[transicion(rt, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PRESENT)]);
+            } else {
+                l.ResourceBarrier(&[transicion(rt, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT)]);
+            }
             l.Close()?;
 
             // 4) Enviar a la GPU, presentar y marcar el fence de este frame
             self.cola.ExecuteCommandLists(&[Some(l.cast()?)]);
-            self.swap.Present(if VSYNC { 1 } else { 0 }, DXGI_PRESENT(0)).ok()?;
+            let banderas = if self.tearing { DXGI_PRESENT_ALLOW_TEARING } else { DXGI_PRESENT(0) };
+            self.swap.Present(self.config.vsync as u32, banderas).ok()?;
 
             self.ultimo_fence += 1;
             self.cola.Signal(&self.fence, self.ultimo_fence)?;
             self.valores_fence[i] = self.ultimo_fence;
+
+            // 5) Captura: esperar a que la copia termine y leer el buffer READBACK
+            if let (Some(destino), Some(rb)) = (captura, &self.readback) {
+                self.esperar_gpu(self.ultimo_fence)?;
+                let mut p = std::ptr::null_mut();
+                rb.buffer.Map(0, None, Some(&mut p))?;
+                let pitch = rb.huella.Footprint.RowPitch as usize;
+                estudio_base::copiar_filas(p as *const u8, pitch, self.config.ancho, self.config.alto, destino, rgba_a_argb);
+                rb.buffer.Unmap(0, Some(&D3D12_RANGE { Begin: 0, End: 0 }));
+            }
         }
         Ok(())
     }
 }
 
-impl Drop for Bmox12 {
+impl Drop for CuboD3d12 {
     fn drop(&mut self) {
         // No liberar recursos mientras la GPU todavía los está usando
         let _ = self.esperar_gpu(self.ultimo_fence);
