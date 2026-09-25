@@ -1,0 +1,17 @@
+[package]
+name = "estudio_cpu"
+version = "0.1.0"
+edition = "2021"
+description = "El rasterizador de referencia de cubo-neutro a PNG, y un comparador de PNG. Sin Direct3D."
+
+[dependencies]
+cubo-neutro = { workspace = true }
+png = { workspace = true }
+
+[[bin]]
+name = "estudio_cpu"
+path = "src/main.rs"
+
+[[bin]]
+name = "comparar"
+path = "src/comparar.rs"

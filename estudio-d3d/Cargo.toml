@@ -1,0 +1,19 @@
+# Estudio en Windows: un cubo 3D por versión de Direct3D (9, 10, 11, 12).
+# No es BMO-X ni se porta tal cual. Lo portable está en ../cubo-neutro.
+#
+#   cargo run -p estudio_d3d12 --release                       (interactivo, VSync)
+#   cargo run -p estudio_d3d12 --release -- --fotograma 30     (PNG de ese fotograma)
+#   cargo run -p estudio_d3d12 --release -- --medir 20000      (FPS sin VSync)
+
+[workspace]
+resolver = "2"
+members = ["base", "cpu", "d3d9", "d3d10", "d3d11", "d3d12"]
+
+[workspace.dependencies]
+cubo-neutro = { path = "../cubo-neutro" }
+estudio_base = { path = "base" }
+png = "0.17"
+windows = "0.58"
+
+[profile.release]
+opt-level = 3
