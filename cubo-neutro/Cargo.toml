@@ -1,0 +1,10 @@
+[package]
+name = "cubo-neutro"
+version = "0.1.0"
+edition = "2021"
+description = "El cubo sin plataforma: malla, matrices, luz y rasterizador de referencia. no_std, sin dependencias."
+
+# Sin [dependencies]: a propósito.
+
+[lib]
+name = "cubo_neutro"
